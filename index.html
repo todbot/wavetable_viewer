@@ -217,11 +217,18 @@ async function loadDefaultSamples() {
 
 // Playback can't start until a user gesture unlocks the AudioContext, so a
 // shared link with playback enabled resumes as soon as the visitor clicks
-// or presses any key anywhere on the page.
+// or presses any key anywhere on the page. Resuming alone isn't enough —
+// a source scheduled while suspended doesn't reliably catch up once the
+// context starts running, so re-trigger the current frame once it does.
 document.addEventListener('pointerdown', unlockAudio);
 document.addEventListener('keydown', unlockAudio);
 function unlockAudio() {
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  if (!audioCtx || audioCtx.state !== 'suspended') return;
+  audioCtx.resume().then(() => {
+    if (scanDirection !== 0 && selectedIndex >= 0) {
+      playFrame(currentFrames[selectedIndex], currentCells[selectedIndex]);
+    }
+  });
 }
 
 function parseHash() {
