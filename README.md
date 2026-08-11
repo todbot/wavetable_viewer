@@ -2,7 +2,7 @@
 
 A browser-based viewer for classic single-cycle wavetable `.WAV` files. Pick a wavetable and see every waveform inside it laid out in a grid, click or arrow-key through them, and scrub through the whole bank with forward/backward/loop/bounce playback.
 
-**[Live demo](https://YOUR-GITHUB-USERNAME.github.io/wavetable_viewer/)** — replace `YOUR-GITHUB-USERNAME` once this is published (see [Deploying to GitHub Pages](#deploying-to-github-pages) below).
+**[Live demo](https://todbot.github.io/wavetable_viewer/)** — replace `YOUR-GITHUB-USERNAME` once this is published (see [Deploying to GitHub Pages](#deploying-to-github-pages) below).
 
 ## Features
 
