@@ -43,5 +43,10 @@ A `.nojekyll` file is included so Pages serves the files as-is without running t
 
 ## License
 
-- Viewer code: no license specified yet — add one (e.g. MIT) if you want to make reuse terms explicit.
+- Viewer code: GPL
 - Bundled wavetables in `samples/`: CC0 1.0 Universal (public domain), per [smpldsnds/wavedit-online](https://github.com/smpldsnds/wavedit-online).
+
+
+## Authorship
+
+This is slop created with Claude but it does work.
