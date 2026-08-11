@@ -88,19 +88,29 @@
   #preview {
     position: sticky; top: 0; margin-bottom: 14px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; display: flex; align-items: center; gap: 16px;
+    padding: 12px; display: flex; align-items: flex-start; gap: 16px;
   }
   #preview canvas { background: var(--bg); border-radius: 4px; }
+  #preview .previewBody { flex: 1; align-self: center; }
   #preview .label { color: var(--dim); font-size: 12px; }
   #preview .hint { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  #preview .shareBtn {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    white-space: nowrap; flex: none;
+  }
+  #preview .shareBtn:hover { border-color: var(--accent); }
+  #preview .shareBtn.active { background: var(--accent); color: #0a1210; border-color: var(--accent); font-weight: 600; }
 
   .transport { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .transport .playLabel { color: var(--dim); font-size: 12px; margin-right: 2px; }
   .transport button {
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px;
   }
   .transport button:hover { border-color: var(--accent); }
   .transport button.active { background: var(--accent); color: #0a1210; border-color: var(--accent); font-weight: 600; }
+  .transport button.arrowBtn { font-size: 17px; padding: 3px 13px; line-height: 1.2; }
   .transport .speed { display: flex; align-items: center; gap: 6px; margin-left: 8px; color: var(--dim); font-size: 12px; }
   .transport .speed input[type="range"] { accent-color: var(--accent); width: 110px; }
   .transport .speed .speedValue { width: 60px; color: var(--text); }
@@ -151,8 +161,10 @@ let scanTimer = null;
 let scanDirection = 0;   // 1 = forward, -1 = backward, 0 = stopped
 let scanMode = 'once';   // 'once' | 'loop' | 'bounce' — what happens at the ends
 let scanIntervalMs = 110; // adjustable time per waveform, persists across file switches
-let btnForwardEl = null, btnBackwardEl = null, btnLoopEl = null, btnBounceEl = null;
+let btnForwardEl = null, btnBackwardEl = null, btnStopEl = null, btnLoopEl = null, btnBounceEl = null;
 let speedInputEl = null, speedValueEl = null;
+let btnShareEl = null;
+let shareResetTimer = null;
 
 const DEFAULT_DIR = 'samples/';
 
@@ -225,6 +237,35 @@ function updateHash() {
   if (scanMode !== 'once') params.set('mode', scanMode);
   if (scanIntervalMs !== 110) params.set('speed', String(scanIntervalMs));
   history.replaceState(null, '', '#' + params.toString());
+}
+
+function copyShareLink() {
+  const url = location.href;
+  const onCopied = () => {
+    clearTimeout(shareResetTimer);
+    btnShareEl.textContent = '✓ Copied';
+    btnShareEl.classList.add('active');
+    shareResetTimer = setTimeout(() => {
+      btnShareEl.textContent = '⎘ Share';
+      btnShareEl.classList.remove('active');
+    }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(onCopied, () => fallbackCopy(url, onCopied));
+  } else {
+    fallbackCopy(url, onCopied);
+  }
+}
+
+function fallbackCopy(text, onCopied) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); onCopied(); } catch (err) { /* ignore */ }
+  document.body.removeChild(ta);
 }
 
 pickBtn.addEventListener('click', async () => {
@@ -319,11 +360,14 @@ async function selectFile(f) {
   previewCanvas.width = 400;
   previewCanvas.height = 140;
   const previewLabel = document.createElement('div');
+  previewLabel.className = 'previewBody';
   previewLabel.innerHTML = `<div class="label" id="previewLabel">Click a waveform to inspect &amp; loop it</div>
     <div class="hint">Click again to stop &middot; arrow keys to move &middot; space to play</div>
     <div class="transport">
-      <button id="btnBackward" title="Play backward through the wavetable">◀ Backward</button>
-      <button id="btnForward" title="Play forward through the wavetable">Forward ▶</button>
+      <span class="playLabel">Play:</span>
+      <button id="btnBackward" class="arrowBtn" title="Play backward through the wavetable" aria-label="Play backward">◀</button>
+      <button id="btnStop" class="arrowBtn" title="Stop playback" aria-label="Stop">⏹</button>
+      <button id="btnForward" class="arrowBtn" title="Play forward through the wavetable" aria-label="Play forward">▶</button>
       <button id="btnLoop" title="Wrap around at the ends">⟲ Loop</button>
       <button id="btnBounce" title="Reverse direction at the ends">⇄ Bounce</button>
       <label class="speed">Speed
@@ -331,8 +375,14 @@ async function selectFile(f) {
         <span class="speedValue" id="speedValue"></span>
       </label>
     </div>`;
+  const shareBtn = document.createElement('button');
+  shareBtn.id = 'btnShare';
+  shareBtn.className = 'shareBtn';
+  shareBtn.title = 'Copy a link to this view to the clipboard';
+  shareBtn.textContent = '⎘ Share';
   preview.appendChild(previewCanvas);
   preview.appendChild(previewLabel);
+  preview.appendChild(shareBtn);
   content.appendChild(preview);
   drawWave(previewCanvas, wav.samples.subarray(0, FRAME_SAMPLES));
   previewCanvasEl = previewCanvas;
@@ -341,10 +391,12 @@ async function selectFile(f) {
   stopScan();
   btnForwardEl = document.getElementById('btnForward');
   btnBackwardEl = document.getElementById('btnBackward');
+  btnStopEl = document.getElementById('btnStop');
   btnLoopEl = document.getElementById('btnLoop');
   btnBounceEl = document.getElementById('btnBounce');
   btnForwardEl.addEventListener('click', () => scanDirection === 1 ? stopScan() : startScan(1));
   btnBackwardEl.addEventListener('click', () => scanDirection === -1 ? stopScan() : startScan(-1));
+  btnStopEl.addEventListener('click', () => stopScan());
   btnLoopEl.addEventListener('click', () => {
     scanMode = scanMode === 'loop' ? 'once' : 'loop';
     updateTransportUI();
@@ -367,6 +419,8 @@ async function selectFile(f) {
       scanTimer = setInterval(stepScan, scanIntervalMs);
     }
   });
+  btnShareEl = document.getElementById('btnShare');
+  btnShareEl.addEventListener('click', copyShareLink);
   updateTransportUI();
 
   const grid = document.createElement('div');
