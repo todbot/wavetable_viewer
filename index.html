@@ -37,6 +37,8 @@
     font-size: 12px;
   }
   header button:hover { filter: brightness(1.1); }
+  header .repoLink { margin-left: auto; color: var(--dim); text-decoration: none; font-size: 12px; }
+  header .repoLink:hover { color: var(--text); }
 
   main { flex: 1; display: flex; min-height: 0; }
 
@@ -110,6 +112,8 @@
   <h1>Wavetable Viewer</h1>
   <button id="pickBtn">Choose a different folder…</button>
   <span class="status" id="status">Loading bundled samples…</span>
+  <a class="repoLink" href="https://github.com/todbot/wavetable_viewer"
+     target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
 </header>
 
 <main>
@@ -168,7 +172,59 @@ async function loadDefaultSamples() {
     filterInput.disabled = files.length === 0;
   } catch (err) {
     status.textContent = 'Bundled samples unavailable (serve over http:// to auto-load, or choose a folder)';
+    return;
   }
+
+  const shared = parseHash();
+  if (shared && shared.file) {
+    const match = files.find(f => f.name === shared.file);
+    if (match) {
+      scanMode = shared.mode;
+      scanIntervalMs = shared.speed;
+      await selectFile(match);
+      showFrame(shared.frame);
+      if (shared.dir !== 0) startScan(shared.dir);
+    }
+  }
+}
+
+// Playback can't start until a user gesture unlocks the AudioContext, so a
+// shared link with playback enabled resumes as soon as the visitor clicks
+// or presses any key anywhere on the page.
+document.addEventListener('pointerdown', unlockAudio);
+document.addEventListener('keydown', unlockAudio);
+function unlockAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function parseHash() {
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw) return null;
+  const params = new URLSearchParams(raw);
+  const file = params.get('file');
+  if (!file) return null;
+  const frame = parseInt(params.get('frame'), 10);
+  const dir = parseInt(params.get('dir'), 10);
+  const mode = params.get('mode');
+  const speed = parseInt(params.get('speed'), 10);
+  return {
+    file,
+    frame: Number.isFinite(frame) ? frame : 0,
+    dir: (dir === 1 || dir === -1) ? dir : 0,
+    mode: (mode === 'loop' || mode === 'bounce') ? mode : 'once',
+    speed: Number.isFinite(speed) ? speed : scanIntervalMs,
+  };
+}
+
+function updateHash() {
+  if (!currentName || selectedIndex < 0) return;
+  const params = new URLSearchParams();
+  params.set('file', currentName);
+  params.set('frame', String(selectedIndex));
+  if (scanDirection !== 0) params.set('dir', String(scanDirection));
+  if (scanMode !== 'once') params.set('mode', scanMode);
+  if (scanIntervalMs !== 110) params.set('speed', String(scanIntervalMs));
+  history.replaceState(null, '', '#' + params.toString());
 }
 
 pickBtn.addEventListener('click', async () => {
@@ -292,10 +348,12 @@ async function selectFile(f) {
   btnLoopEl.addEventListener('click', () => {
     scanMode = scanMode === 'loop' ? 'once' : 'loop';
     updateTransportUI();
+    updateHash();
   });
   btnBounceEl.addEventListener('click', () => {
     scanMode = scanMode === 'bounce' ? 'once' : 'bounce';
     updateTransportUI();
+    updateHash();
   });
   speedInputEl = document.getElementById('speedInput');
   speedValueEl = document.getElementById('speedValue');
@@ -303,6 +361,7 @@ async function selectFile(f) {
   speedInputEl.addEventListener('input', () => {
     scanIntervalMs = Number(speedInputEl.value);
     updateTransportUI();
+    updateHash();
     if (scanTimer) {
       clearInterval(scanTimer);
       scanTimer = setInterval(stepScan, scanIntervalMs);
@@ -337,13 +396,10 @@ async function selectFile(f) {
     cell.appendChild(idx);
 
     cell.addEventListener('click', () => {
+      const wasActive = cell === activeCell;
       stopScan();
       showFrame(i);
-      if (cell === activeCell) {
-        stopPlayback();
-      } else {
-        playFrame(frame, cell);
-      }
+      if (!wasActive) playFrame(frame, cell);
     });
 
     grid.appendChild(cell);
@@ -362,6 +418,7 @@ function showFrame(i) {
   for (const c of currentCells) c.classList.remove('selected');
   currentCells[i].classList.add('selected');
   currentCells[i].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  updateHash();
 }
 
 function gridColumnCount() {
@@ -380,10 +437,10 @@ document.addEventListener('keydown', (e) => {
   if (e.key === ' ' || e.key === 'Enter') {
     if (selectedIndex < 0) return;
     e.preventDefault();
-    stopScan();
     const cell = currentCells[selectedIndex];
-    if (cell === activeCell) stopPlayback();
-    else playFrame(currentFrames[selectedIndex], cell);
+    const wasActive = cell === activeCell;
+    stopScan();
+    if (!wasActive) playFrame(currentFrames[selectedIndex], cell);
     return;
   }
 
@@ -397,10 +454,11 @@ document.addEventListener('keydown', (e) => {
     case 'ArrowUp':    next = Math.max(0, from - cols); break;
     default: return;
   }
+  const wasPlaying = !!activeSource;
   e.preventDefault();
   stopScan();
   showFrame(next);
-  if (activeSource) playFrame(currentFrames[next], currentCells[next]); // follow selection while playing
+  if (wasPlaying) playFrame(currentFrames[next], currentCells[next]); // follow selection while playing
 });
 
 function startScan(direction) {
@@ -411,12 +469,15 @@ function startScan(direction) {
   if (scanTimer) clearInterval(scanTimer);
   scanTimer = setInterval(stepScan, scanIntervalMs);
   updateTransportUI();
+  updateHash();
 }
 
 function stopScan() {
   if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
   scanDirection = 0;
+  stopPlayback();
   updateTransportUI();
+  updateHash();
 }
 
 function stepScan() {
