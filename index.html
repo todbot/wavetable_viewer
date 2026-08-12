@@ -325,7 +325,10 @@ pickBtn.addEventListener('click', async () => {
     status.textContent = `${files.length} WAV file${files.length === 1 ? '' : 's'} loaded`;
     filterInput.disabled = files.length === 0;
   } catch (err) {
-    if (err.name !== 'AbortError') console.error(err);
+    if (err.name !== 'AbortError') {
+      console.error(err);
+      status.textContent = `Couldn't open folder picker: ${err.message || err.name}`;
+    }
   }
 });
 
@@ -335,10 +338,15 @@ function pickWithInput() {
     input.type = 'file';
     input.webkitdirectory = true;
     input.multiple = true;
+    input.style.display = 'none';
+    // Some browsers (Safari in particular) won't reliably open the native
+    // picker for a detached <input>; it needs to actually be in the DOM.
+    document.body.appendChild(input);
     input.addEventListener('change', () => {
       const picked = Array.from(input.files)
         .filter(f => /\.wav$/i.test(f.name))
         .map(f => ({ name: f.name, load: () => f.arrayBuffer() }));
+      input.remove();
       resolve(picked);
     });
     input.click();
