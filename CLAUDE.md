@@ -38,16 +38,50 @@ Header is minimal: title + "View on GitHub" link. The folder-picker button and t
 
 - `files`: array of `{ name, load: () => Promise<ArrayBuffer> }` — a uniform interface over both the fetch-based default samples and picker-based `File` objects, so `selectFile()` doesn't need to know which source it came from.
 - `selectFile(f)` tears down and rebuilds `#content` from scratch on every file switch (`content.innerHTML = ''`), including the preview canvas, transport bar, share button, and the full waveform grid. Global element refs (`previewCanvasEl`, `btnForwardEl`, `btnShareEl`, etc.) get reassigned each time — this is why `stopScan()`/event listeners are re-wired per file rather than once at page load.
+  - `#topPanel` is built as **one `innerHTML` template**; only the two
+    per-file text fields (`#wavTitle`, `#wavMeta`) are filled in afterwards,
+    via `textContent` so a filename containing markup can't escape. The
+    waveform grid below it is still built with `createElement` per cell,
+    since each cell needs its own canvas drawn and its own click listener.
+  - **Ordering constraint:** the `stopScan()` call sits *deliberately above*
+    the `btnForwardEl`/`btnBackwardEl`/… reassignments, so the
+    `updateTransportUI()` inside it writes to the outgoing file's
+    now-detached buttons rather than the freshly built ones. Hoisting the
+    wiring above `stopScan()` changes what the transport shows mid-switch.
+    Same reason `wasScanDirection`/`wasPlaying` are captured at the very top
+    of the function — `stopScan()` zeroes `scanDirection` and
+    `stopPlayback()` clears `activeSource`.
 - `currentFrames` / `currentCells`: parallel arrays (Int16Array subarrays and their corresponding grid `<div>`s) for the currently displayed WAV. Most navigation/playback functions index into both by the same `i`.
 - `selectedIndex`: the single source of truth for "which waveform is selected." Arrow keys, clicks, and the scan transport all funnel through `showFrame(i)` to update it consistently (preview canvas, `.selected` class, scroll-into-view, and the URL hash via `updateHash()`).
+  - `showFrame()` clears the previous `.selected` **before** reassigning
+    `selectedIndex` — doing it after would strip the class off the incoming
+    cell and leave the outgoing one still outlined, so two cells look
+    selected at once during a scan.
 - Playback (`playFrame`/`stopPlayback`) is independent of selection — `activeCell`/`activeSource` track what's *audibly playing*, separate from what's *selected*. A waveform can be selected without playing (e.g. after an arrow key press with nothing already playing).
 - The scan transport (Backward/Stop/Forward icon buttons, Loop, Bounce, Speed slider) is a `setInterval` loop (`startScan`/`stopScan`/`stepScan`) that advances `selectedIndex` and calls `playFrame` each tick. `scanMode` (`'once' | 'loop' | 'bounce'`) only matters at the array boundaries — see `stepScan()`. `scanMode` and `scanIntervalMs` intentionally persist across file switches (only `scanDirection`/the timer reset via `stopScan()` in `selectFile`), so a user's chosen speed/mode carries over to the next file they pick.
 - `stopScan()` also calls `stopPlayback()` — it's the one function that fully silences audio and resets scan state together. **Gotcha:** every manual interaction (cell click, arrow keys, space/enter) calls `stopScan()` at the start of its handler, purely to stop any competing auto-scan before doing its own thing. This previously caused a real bug (see "Audio autoplay unlock" below) where a source started by one handler got silently killed by `stopScan()`'s `stopPlayback()` call fired moments later by a sibling handler on the same gesture. If you add new interaction handlers that call `stopScan()`, be aware it has this side effect now, not just "stop the timer."
 - `gridColumnCount()` infers the grid's actual column count at runtime by comparing `offsetTop` of cells, since the CSS grid uses `auto-fill` and reflows with window width — there's no fixed column count to hardcode for Up/Down arrow navigation.
+- **`cell.tabIndex = -1` in the grid-building loop is load-bearing — do not
+  remove it.** It looks like dead code because nothing ever calls `.focus()`
+  on a cell. What it actually does: a `tabindex="-1"` div is *click*-focusable
+  and a plain div is not, so clicking a cell moves focus off `#filter`.
+  Without it, focus stays in the filter box, the `document` keydown handler
+  keeps early-returning at its `document.activeElement === filterInput`
+  guard, and **arrow-key navigation silently dies for the rest of the
+  session** once the user has typed in the filter. Verify with
+  `document.activeElement.id` after a CDP-dispatched cell click, not by
+  reading the code.
 
 ## URL state / sharing
 
 `updateHash()` writes `#file=<name>&frame=<i>&dir=<1|-1>&mode=<loop|bounce>&speed=<ms>` via `history.replaceState` (never `pushState`, and never plain `location.hash =`) — this keeps the address bar live without spamming browser history or firing `hashchange`. `dir`/`mode`/`speed` are omitted when at their defaults to keep plain view-and-select links short. It's called from `showFrame()`, `startScan()`, `stopScan()`, and the Loop/Bounce/Speed control handlers — anywhere the shareable state changes.
+
+The default scan speed lives in one place, `DEFAULT_SPEED_MS` — it is both
+the initial value of `scanIntervalMs` and the value `updateHash()` compares
+against to decide whether to omit `speed=`. These were two separate `110`
+literals; keep them as one const, since changing only one silently starts
+emitting a redundant `speed=` on every share link. `SAMPLE_SCALE` (16-bit
+full scale) is likewise shared by `drawWave()` and `playFrame()`.
 
 `parseHash()` is the inverse, read once in `loadDefaultSamples()` after the file list loads. If the hash names a bundled file, it's auto-selected, jumped to the given frame, and — if `dir` was set — scanning starts automatically.
 
@@ -79,6 +113,47 @@ curl -s http://localhost:9333/json/version   # confirms it's up, gives webSocket
 Then from a `.mjs` script: `PUT http://localhost:9333/json/new?<url>` to open a tab at a target URL (returns that tab's own `webSocketDebuggerUrl`), connect a `WebSocket` to it, and send CDP commands as `{id, method, params}` JSON, matching responses by `id`. Useful methods used so far: `Runtime.evaluate` (poll app state, e.g. `document.querySelectorAll('#grid .cell').length` to know the grid actually rendered), `Input.dispatchMouseEvent` (mousePressed+mouseReleased — CDP-dispatched input is treated as a **trusted** gesture, so this is how the autoplay-unlock fix above was actually verified, not just eyeballed), `Emulation.setDeviceMetricsOverride` (fixed viewport/DPR for screenshots), and `Page.captureScreenshot`. Always `pkill -f "remote-debugging-port=9333"` when done.
 
 This is also how `og-image.png` was produced (viewport set to exactly 1200×630 @2x, whole app captured with the sidebar visible) — regenerate it the same way if the layout changes and the social card goes stale.
+
+Two operational notes learned the hard way:
+
+- Scope the teardown. `pkill -f "remote-debugging-port=9333"` is safe;
+  `pkill -9 -f "http.server"` is **not** — it will kill unrelated Python
+  servers the user has running. Match on the specific port you started.
+- The `--user-data-dir` flag pointed at a scratch directory avoids
+  colliding with a real Chrome profile.
+
+### Proving a refactor changed nothing
+
+For behavior-preserving cleanups, a diffable trace beats spot checks. The
+approach that worked:
+
+1. Write one `.mjs` harness that drives a **fixed** interaction sequence
+   (open file → focus filter → click cell → arrow keys → scan → toggle
+   loop/bounce → change speed → switch files mid-scan → stop) and dumps a
+   JSON array of state snapshots plus a PNG. Snapshot `location.hash`,
+   `.cell.selected`/`.playing` counts, transport `.active` classes, label
+   text, `getComputedStyle` of the buttons (catches CSS merges), and FNV
+   hashes of `getImageData` for the preview and a few grid canvases
+   (catches rendering changes).
+2. Run it **twice against the unmodified page first** and diff, to prove the
+   trace is deterministic. With fixed `sleep`s it comes out byte-identical,
+   including scan-timing-dependent frame numbers — so no normalisation is
+   needed and any post-edit diff is a real change, not noise. Don't skip
+   this step; without it you can't tell a regression from jitter.
+3. Edit, re-run, `diff` the JSONs and `md5` the PNGs.
+
+To A/B against the pre-edit version without touching the working tree (and
+without any mutating git command), extract it read-only and serve it on a
+second port:
+
+```sh
+git show HEAD:index.html > /tmp/scratch/baseline-site/index.html
+ln -s "$PWD/samples" /tmp/scratch/baseline-site/samples
+(cd /tmp/scratch/baseline-site && python3 -m http.server 8766 &)
+```
+
+This is how the shared-link autoload path (`#file=…&dir=1&speed=200`, which
+has no in-app UI to click) was compared before and after.
 
 ## Deployment
 
