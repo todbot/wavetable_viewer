@@ -11,6 +11,8 @@ forward/backward/loop/bounce playback.
 
 (or run it locally replace or published to your own github pages, see below)
 
+<a href="https://todbot.github.io/wavetable_viewer/"><img src="./og-image.png" width="800"></a>
+
 ## Features
 
 - Loads the bundled `samples/` bank automatically, or pick any other local
@@ -25,6 +27,7 @@ forward/backward/loop/bounce playback.
   **Forward**/**Backward**, **Loop** (wrap at the ends) or **Bounce**
   (ping-pong at the ends), with an adjustable time-per-waveform speed
   slider
+
 
 ## Wavetable format
 

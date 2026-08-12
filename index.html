@@ -119,22 +119,19 @@
   #preview .previewBody { flex: 1; align-self: center; }
   #preview .label { color: var(--dim); font-size: 12px; }
   #preview .hint { color: var(--dim); font-size: 11px; margin-top: 4px; }
-  .shareBtn {
+  /* Share and the transport controls share one button look. */
+  .shareBtn, .transport button {
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px;
-    white-space: nowrap; flex: none;
   }
-  .shareBtn:hover { border-color: var(--accent); }
-  .shareBtn.active { background: var(--accent); color: #0a1210; border-color: var(--accent); font-weight: 600; }
+  .shareBtn:hover, .transport button:hover { border-color: var(--accent); }
+  .shareBtn.active, .transport button.active {
+    background: var(--accent); color: #0a1210; border-color: var(--accent); font-weight: 600;
+  }
+  .shareBtn { white-space: nowrap; flex: none; }
 
   .transport { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
   .transport .playLabel { color: var(--dim); font-size: 12px; margin-right: 2px; }
-  .transport button {
-    background: var(--bg); color: var(--text); border: 1px solid var(--border);
-    padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px;
-  }
-  .transport button:hover { border-color: var(--accent); }
-  .transport button.active { background: var(--accent); color: #0a1210; border-color: var(--accent); font-weight: 600; }
   .transport button.arrowBtn { font-size: 17px; padding: 3px 13px; line-height: 1.2; }
   .transport .speed { display: flex; align-items: center; gap: 6px; margin-left: 8px; color: var(--dim); font-size: 12px; }
   .transport .speed input[type="range"] { accent-color: var(--accent); width: 110px; }
@@ -176,13 +173,17 @@
 
 <script>
 const pickBtn = document.getElementById('pickBtn');
-const status = document.getElementById('status');
+const statusEl = document.getElementById('status');
 const filterInput = document.getElementById('filter');
 const fileListEl = document.getElementById('fileList');
 const content = document.getElementById('content');
 const soundHint = document.getElementById('soundHint');
 
-const FRAME_SAMPLES = 256; // samples per single-cycle waveform
+const FRAME_SAMPLES = 256;     // samples per single-cycle waveform
+const SAMPLE_SCALE = 32768;    // 16-bit PCM full scale
+const DEFAULT_SPEED_MS = 110;  // scan speed omitted from the URL hash at this value
+
+const plural = (n) => n === 1 ? '' : 's';
 
 let files = [];        // { name, load: () => Promise<ArrayBuffer> }
 let currentName = null;
@@ -199,7 +200,7 @@ let previewLabelEl = null;
 let scanTimer = null;
 let scanDirection = 0;   // 1 = forward, -1 = backward, 0 = stopped
 let scanMode = 'once';   // 'once' | 'loop' | 'bounce' — what happens at the ends
-let scanIntervalMs = 110; // adjustable time per waveform, persists across file switches
+let scanIntervalMs = DEFAULT_SPEED_MS; // adjustable per-waveform time, persists across file switches
 let btnForwardEl = null, btnBackwardEl = null, btnStopEl = null, btnLoopEl = null, btnBounceEl = null;
 let speedInputEl = null, speedValueEl = null;
 let btnShareEl = null;
@@ -218,11 +219,9 @@ async function loadDefaultSamples() {
       name,
       load: async () => (await fetch(DEFAULT_DIR + name)).arrayBuffer(),
     }));
-    renderFileList();
-    status.textContent = `${files.length} bundled WAV file${files.length === 1 ? '' : 's'}`;
-    filterInput.disabled = files.length === 0;
-  } catch (err) {
-    status.textContent = 'Bundled samples unavailable (serve over http:// to auto-load, or choose a folder)';
+    refreshFiles(`${files.length} bundled WAV file${plural(files.length)}`);
+  } catch {
+    statusEl.textContent = 'Bundled samples unavailable (serve over http:// to auto-load, or choose a folder)';
     return;
   }
 
@@ -280,7 +279,7 @@ function updateHash() {
   params.set('frame', String(selectedIndex));
   if (scanDirection !== 0) params.set('dir', String(scanDirection));
   if (scanMode !== 'once') params.set('mode', scanMode);
-  if (scanIntervalMs !== 110) params.set('speed', String(scanIntervalMs));
+  if (scanIntervalMs !== DEFAULT_SPEED_MS) params.set('speed', String(scanIntervalMs));
   history.replaceState(null, '', '#' + params.toString());
 }
 
@@ -309,7 +308,7 @@ function fallbackCopy(text, onCopied) {
   ta.style.opacity = '0';
   document.body.appendChild(ta);
   ta.select();
-  try { document.execCommand('copy'); onCopied(); } catch (err) { /* ignore */ }
+  try { document.execCommand('copy'); onCopied(); } catch { /* ignore */ }
   document.body.removeChild(ta);
 }
 
@@ -331,16 +330,21 @@ pickBtn.addEventListener('click', async () => {
     picked.sort((a, b) => a.name.localeCompare(b.name));
     files = picked;
     currentName = null;
-    renderFileList();
-    status.textContent = `${files.length} WAV file${files.length === 1 ? '' : 's'} loaded`;
-    filterInput.disabled = files.length === 0;
+    refreshFiles(`${files.length} WAV file${plural(files.length)} loaded`);
   } catch (err) {
     if (err.name !== 'AbortError') {
       console.error(err);
-      status.textContent = `Couldn't open folder picker: ${err.message || err.name}`;
+      statusEl.textContent = `Couldn't open folder picker: ${err.message || err.name}`;
     }
   }
 });
+
+// Re-render the sidebar list after `files` changes, and report what's in it.
+function refreshFiles(statusText) {
+  renderFileList();
+  statusEl.textContent = statusText;
+  filterInput.disabled = files.length === 0;
+}
 
 function pickWithInput() {
   return new Promise((resolve) => {
@@ -401,60 +405,49 @@ async function selectFile(f) {
 
   content.innerHTML = '';
 
+  // The top panel is static markup apart from two text fields, so it's one
+  // template; the per-file text goes in via textContent below (never
+  // interpolated, so a filename containing markup can't escape).
   const topPanel = document.createElement('div');
   topPanel.id = 'topPanel';
+  topPanel.innerHTML = `<div class="titleRow">
+      <h2 id="wavTitle"></h2>
+      <button id="btnShare" class="shareBtn" title="Copy a link to this view to the clipboard">⎘ Share</button>
+    </div>
+    <p id="wavMeta"></p>
+    <div id="preview">
+      <canvas width="400" height="140"></canvas>
+      <div class="previewBody">
+        <div class="label" id="previewLabel">Click a waveform to inspect &amp; loop it</div>
+        <div class="hint">Click again to stop &middot; arrow keys to move &middot; space to play</div>
+        <div class="transport">
+          <span class="playLabel">Play:</span>
+          <button id="btnBackward" class="arrowBtn" title="Play backward through the wavetable" aria-label="Play backward">◀</button>
+          <button id="btnStop" class="arrowBtn" title="Stop playback" aria-label="Stop">⏹</button>
+          <button id="btnForward" class="arrowBtn" title="Play forward through the wavetable" aria-label="Play forward">▶</button>
+          <button id="btnLoop" title="Wrap around at the ends">⟲ Loop</button>
+          <button id="btnBounce" title="Reverse direction at the ends">⇄ Bounce</button>
+          <label class="speed">Speed
+            <input id="speedInput" type="range" min="20" max="500" step="10">
+            <span class="speedValue" id="speedValue"></span>
+          </label>
+        </div>
+      </div>
+    </div>`;
   content.appendChild(topPanel);
 
-  const titleRow = document.createElement('div');
-  titleRow.className = 'titleRow';
-  topPanel.appendChild(titleRow);
-
-  const title = document.createElement('h2');
-  title.id = 'wavTitle';
-  title.textContent = f.name;
-  titleRow.appendChild(title);
-
-  const shareBtn = document.createElement('button');
-  shareBtn.id = 'btnShare';
-  shareBtn.className = 'shareBtn';
-  shareBtn.title = 'Copy a link to this view to the clipboard';
-  shareBtn.textContent = '⎘ Share';
-  titleRow.appendChild(shareBtn);
-
-  const meta = document.createElement('p');
-  meta.id = 'wavMeta';
-  meta.textContent = `${wav.sampleRate} Hz · ${wav.bitsPerSample}-bit · ${wav.numChannels}ch · ` +
+  topPanel.querySelector('#wavTitle').textContent = f.name;
+  topPanel.querySelector('#wavMeta').textContent =
+    `${wav.sampleRate} Hz · ${wav.bitsPerSample}-bit · ${wav.numChannels}ch · ` +
     `${wav.samples.length} samples · ${frameCount} waveforms × ${FRAME_SAMPLES} samples`;
-  topPanel.appendChild(meta);
 
-  const preview = document.createElement('div');
-  preview.id = 'preview';
-  const previewCanvas = document.createElement('canvas');
-  previewCanvas.width = 400;
-  previewCanvas.height = 140;
-  const previewLabel = document.createElement('div');
-  previewLabel.className = 'previewBody';
-  previewLabel.innerHTML = `<div class="label" id="previewLabel">Click a waveform to inspect &amp; loop it</div>
-    <div class="hint">Click again to stop &middot; arrow keys to move &middot; space to play</div>
-    <div class="transport">
-      <span class="playLabel">Play:</span>
-      <button id="btnBackward" class="arrowBtn" title="Play backward through the wavetable" aria-label="Play backward">◀</button>
-      <button id="btnStop" class="arrowBtn" title="Stop playback" aria-label="Stop">⏹</button>
-      <button id="btnForward" class="arrowBtn" title="Play forward through the wavetable" aria-label="Play forward">▶</button>
-      <button id="btnLoop" title="Wrap around at the ends">⟲ Loop</button>
-      <button id="btnBounce" title="Reverse direction at the ends">⇄ Bounce</button>
-      <label class="speed">Speed
-        <input id="speedInput" type="range" min="20" max="500" step="10">
-        <span class="speedValue" id="speedValue"></span>
-      </label>
-    </div>`;
-  preview.appendChild(previewCanvas);
-  preview.appendChild(previewLabel);
-  topPanel.appendChild(preview);
-  drawWave(previewCanvas, wav.samples.subarray(0, FRAME_SAMPLES));
-  previewCanvasEl = previewCanvas;
-  previewLabelEl = document.getElementById('previewLabel');
+  previewCanvasEl = topPanel.querySelector('#preview canvas');
+  previewLabelEl = topPanel.querySelector('#previewLabel');
+  drawWave(previewCanvasEl, wav.samples.subarray(0, FRAME_SAMPLES));
 
+  // Deliberately before the btn*El reassignments: stopScan() calls
+  // updateTransportUI(), which should write to the outgoing file's
+  // (now-detached) buttons, not the freshly built ones.
   stopScan();
   btnForwardEl = document.getElementById('btnForward');
   btnBackwardEl = document.getElementById('btnBackward');
@@ -538,10 +531,12 @@ async function selectFile(f) {
 
 function showFrame(i) {
   if (i < 0 || i >= currentFrames.length) return;
+  // Clear the old highlight before selectedIndex moves — doing it after would
+  // strip the class off the new cell and leave the old one outlined.
+  if (selectedIndex >= 0) currentCells[selectedIndex].classList.remove('selected');
   selectedIndex = i;
   previewLabelEl.textContent = `Waveform #${i}`;
   drawWave(previewCanvasEl, currentFrames[i], true);
-  for (const c of currentCells) c.classList.remove('selected');
   currentCells[i].classList.add('selected');
   currentCells[i].scrollIntoView({ block: 'nearest', inline: 'nearest' });
   updateHash();
@@ -642,7 +637,7 @@ function drawWave(canvas, samples, thick) {
   const n = samples.length;
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * w;
-    const y = h / 2 - (samples[i] / 32768) * (h / 2 - 2);
+    const y = h / 2 - (samples[i] / SAMPLE_SCALE) * (h / 2 - 2);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke();
@@ -667,7 +662,7 @@ function playFrame(frame, cell) {
 
   const buffer = audioCtx.createBuffer(1, frame.length, audioCtx.sampleRate);
   const chan = buffer.getChannelData(0);
-  for (let i = 0; i < frame.length; i++) chan[i] = frame[i] / 32768;
+  for (let i = 0; i < frame.length; i++) chan[i] = frame[i] / SAMPLE_SCALE;
 
   const src = audioCtx.createBufferSource();
   src.buffer = buffer;
@@ -684,7 +679,7 @@ function playFrame(frame, cell) {
 
 function stopPlayback() {
   if (activeSource) {
-    try { activeSource.stop(); } catch (e) {}
+    try { activeSource.stop(); } catch { /* already stopped */ }
     activeSource.disconnect();
     activeSource = null;
   }
