@@ -9,7 +9,7 @@ forward/backward/loop/bounce playback.
 | [**▶ View Wavetables**](https://todbot.github.io/wavetable_viewer/) |
 |---|
 
-(or run it locally replace or published to your own github pages, see below)
+(or run it locally or publish to your own github pages, see below)
 
 <a href="https://todbot.github.io/wavetable_viewer/"><img src="./og-image.png" width="800"></a>
 
@@ -86,4 +86,4 @@ running them through Jekyll.
 
 ## Authorship
 
-This is slop created with Claude but it does work.
+This is slop created mostly by Claude but it does work.
