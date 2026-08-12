@@ -129,9 +129,22 @@
   .transport .speed { display: flex; align-items: center; gap: 6px; margin-left: 8px; color: var(--dim); font-size: 12px; }
   .transport .speed input[type="range"] { accent-color: var(--accent); width: 110px; }
   .transport .speed .speedValue { width: 60px; color: var(--text); }
+
+  #soundHint {
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: #0a1210;
+    padding: 8px 18px; border-radius: 20px;
+    font-size: 13px; font-weight: 600;
+    pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,.35);
+    opacity: 0; transition: opacity .4s ease;
+    z-index: 1000;
+  }
+  #soundHint.visible { opacity: 1; }
 </style>
 </head>
 <body>
+
+<div id="soundHint">🔊 Click for sound</div>
 
 <header>
   <h1>Wavetable Viewer</h1>
@@ -157,6 +170,7 @@ const status = document.getElementById('status');
 const filterInput = document.getElementById('filter');
 const fileListEl = document.getElementById('fileList');
 const content = document.getElementById('content');
+const soundHint = document.getElementById('soundHint');
 
 const FRAME_SAMPLES = 256; // samples per single-cycle waveform
 
@@ -210,25 +224,24 @@ async function loadDefaultSamples() {
       scanIntervalMs = shared.speed;
       await selectFile(match);
       showFrame(shared.frame);
-      if (shared.dir !== 0) startScan(shared.dir);
+      if (shared.dir !== 0) {
+        startScan(shared.dir);
+        soundHint.classList.add('visible');
+      }
     }
   }
 }
 
 // Playback can't start until a user gesture unlocks the AudioContext, so a
 // shared link with playback enabled resumes as soon as the visitor clicks
-// or presses any key anywhere on the page. Resuming alone isn't enough —
-// a source scheduled while suspended doesn't reliably catch up once the
-// context starts running, so re-trigger the current frame once it does.
+// or presses any key anywhere on the page. The actual re-trigger of audio
+// once unlocked lives in playFrame()'s onstatechange handler, not here —
+// see the comment there for why.
 document.addEventListener('pointerdown', unlockAudio);
 document.addEventListener('keydown', unlockAudio);
 function unlockAudio() {
-  if (!audioCtx || audioCtx.state !== 'suspended') return;
-  audioCtx.resume().then(() => {
-    if (scanDirection !== 0 && selectedIndex >= 0) {
-      playFrame(currentFrames[selectedIndex], currentCells[selectedIndex]);
-    }
-  });
+  soundHint.classList.remove('visible');
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 }
 
 function parseHash() {
@@ -599,7 +612,20 @@ function drawWave(canvas, samples, thick) {
 }
 
 function playFrame(frame, cell) {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // A source started while suspended (e.g. autoplay from a shared link,
+    // before any gesture) gets silently killed by whatever stopScan()/
+    // stopPlayback() call happens to fire next — arrow keys and cell
+    // clicks both trigger one as part of their own handling. So instead
+    // of racing to replay audio inside the click/keydown handler itself,
+    // just re-trigger once the context actually confirms it's running.
+    audioCtx.onstatechange = () => {
+      if (audioCtx.state === 'running' && activeCell && selectedIndex >= 0) {
+        playFrame(currentFrames[selectedIndex], currentCells[selectedIndex]);
+      }
+    };
+  }
   stopPlayback();
 
   const buffer = audioCtx.createBuffer(1, frame.length, audioCtx.sampleRate);
